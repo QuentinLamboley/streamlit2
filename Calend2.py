@@ -25,7 +25,6 @@ def get_dropbox_access_token():
         return response.json().get("access_token")
     else:
         st.error(f"⚠️ Erreur de renouvellement du token Dropbox : {response.json()}")
-        return None
 
 # 📌 Générer un Access Token actualisé
 DROPBOX_ACCESS_TOKEN = get_dropbox_access_token()
@@ -86,11 +85,8 @@ def delete_all_reservations(password):
 # ✅ Interface utilisateur
 st.set_page_config(page_title="Calendrier RESOLVE", layout="centered")
 
-st.markdown("""
-    <h1 style='text-align: center; background-color: #004466; padding: 15px; border-radius: 10px; color: white;'>
-        📆 Réservations pour entretiens RESOLVE
-    </h1>
-""", unsafe_allow_html=True)
+st.markdown("""<h1 style='text-align: center; background-color: #004466; padding: 15px; border-radius: 10px; color: white;'>
+📆 Réservations pour entretiens RESOLVE</h1>""", unsafe_allow_html=True)
 
 st.markdown("### **Réservez vos créneaux** 📝")
 
@@ -115,62 +111,69 @@ st.markdown("---")
 st.markdown("### 📊 **Disponibilités par jour**")
 
 df_reservations = load_reservations()
+
 if not df_reservations.empty:
-    for jour, df_jour in df_reservations.groupby("Date"):
-        st.markdown(f"#### 📅 {jour}")
+    # 🔹 Ajouter la colonne NomComplet
+    df_reservations["NomComplet"] = df_reservations["Prénom"] + " " + df_reservations["Nom"]
+    all_users = sorted(df_reservations["NomComplet"].unique())
+    selected_users = st.multiselect("👥 Filtrer par personne(s)", all_users)
 
-        # Compter le nombre de personnes par créneau
-        counts = df_jour["Créneau"].value_counts().sort_values(ascending=False)  # 📌 Trier par nombre de réservants
-        noms_par_creneau = df_jour.groupby("Créneau")["Prénom"].apply(lambda x: ', '.join(x))
+    # 🔹 Initialiser df_filtered
+    df_filtered = df_reservations
 
-        # 📌 Création du graphique interactif avec hover pour afficher les noms
-        df_plot = pd.DataFrame({"Créneaux": counts.index, "Nombre de réservations": counts.values})
-        df_plot["Noms"] = df_plot["Créneaux"].map(noms_par_creneau)
+    # 🔹 Filtrer les créneaux communs à toutes les personnes sélectionnées
+    if selected_users:
+        grouped = df_reservations.groupby(["Date", "Créneau"])["NomComplet"].nunique()
+        common_slots = grouped[grouped == len(selected_users)].index
+        df_filtered = df_reservations.set_index(["Date", "Créneau"]).loc[common_slots].reset_index()
 
-        fig = px.bar(
-            df_plot,
-            x="Créneaux",
-            y="Nombre de réservations",
-            text="Nombre de réservations",
-            labels={'Créneaux': "Créneaux", 'Nombre de réservations': "Nombre de réservations"},
-            title=f"Disponibilités le {jour}",
-            color="Créneaux",
-            hover_data={"Noms": True},
-        )
-        fig.update_traces(texttemplate='%{text}', textposition='outside')
-        fig.update_yaxes(dtick=1)  # 🔥 Suppression des décimales
-        st.plotly_chart(fig, use_container_width=True)
+    # 🔹 Si aucun créneau commun trouvé, afficher un message
+    if df_filtered.empty:
+        st.info("Aucun créneau commun trouvé pour les personnes sélectionnées.")
+    else:
+        for jour, df_jour in df_filtered.groupby("Date"):
+            st.markdown(f"#### 📅 {jour}")
+
+            counts = df_jour["Créneau"].value_counts().sort_values(ascending=False)
+            noms_par_creneau = df_jour.groupby("Créneau")["Prénom"].apply(lambda x: ', '.join(x))
+
+            df_plot = pd.DataFrame({"Créneaux": counts.index, "Nombre de réservations": counts.values})
+            df_plot["Noms"] = df_plot["Créneaux"].map(noms_par_creneau)
+
+            fig = px.bar(
+                df_plot,
+                x="Créneaux",
+                y="Nombre de réservations",
+                text="Nombre de réservations",
+                labels={'Créneaux': "Créneaux", 'Nombre de réservations': "Nombre de réservations"},
+                title=f"Disponibilités le {jour}",
+                color="Créneaux",
+                hover_data={"Noms": True},
+            )
+            fig.update_traces(texttemplate='%{text}', textposition='outside')
+            fig.update_yaxes(dtick=1)
+            st.plotly_chart(fig, use_container_width=True)
 
 # ✅ Suppression des créneaux individuels
 st.markdown("---")
 st.markdown("### ❌ **Supprimer un créneau réservé**")
 
-def delete_reservations(prenom, nom, date, creneaux):
-    df = load_reservations()
-    df = df[~((df["Prénom"] == prenom) & (df["Nom"] == nom) & (df["Date"] == date) & (df["Créneau"].isin(creneaux)))]
-    save_reservations(df)
-
-if df_reservations.empty:
-    st.info("📌 Aucune réservation enregistrée.")
-else:
+if not df_reservations.empty:
     user = st.text_input("Entrez votre prénom et nom", placeholder="Ex: Jean Dupont")
-    user_reservations = df_reservations[df_reservations["Prénom"] + " " + df_reservations["Nom"] == user]
+    user_reservations = df_reservations[df_reservations["NomComplet"] == user]
 
     if not user_reservations.empty:
-     # Sélection multiple pour suppression
         selected_reservations = st.multiselect("📅 Sélectionnez les créneaux à supprimer", user_reservations["Date"] + " - " + user_reservations["Créneau"])
         if st.button("🗑️ Supprimer les créneaux sélectionnés"):
-            if selected_reservations:
-                for reservation in selected_reservations:
-                    jour, creneau = reservation.split(" - ")
-                    delete_reservations(prenom, nom, jour, [creneau])
-                st.success("✅ Créneaux supprimés.")
-            else:
-                st.warning("⚠️ Veuillez sélectionner au moins un créneau.")
-
+            for reservation in selected_reservations:
+                jour, creneau = reservation.split(" - ")
+                delete_reservation(*user.split(), jour, creneau)
+            st.success("✅ Créneaux supprimés.")
 
 # ✅ Réinitialisation des créneaux (Admin)
 st.markdown("---")
 admin_password = st.text_input("🔑 Mot de passe admin", type="password")
 if st.button("❌ Supprimer TOUTES les réservations"):
     delete_all_reservations(admin_password)
+
+
