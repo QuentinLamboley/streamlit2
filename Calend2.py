@@ -83,10 +83,10 @@ def delete_all_reservations(password):
         st.error("❌ Mot de passe incorrect.")
 
 # ✅ Interface utilisateur
-st.set_page_config(page_title="Calendrier RESOLVE", layout="centered")
+st.set_page_config(page_title="Calendar Tool", layout="centered")
 
 st.markdown("""<h1 style='text-align: center; background-color: #004466; padding: 15px; border-radius: 10px; color: white;'>
-📆 Réservations pour entretiens RESOLVE</h1>""", unsafe_allow_html=True)
+📆 Reservations tool</h1>""", unsafe_allow_html=True)
 
 st.markdown("### **Réservez vos créneaux** 📝")
 
