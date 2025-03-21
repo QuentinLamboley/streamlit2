@@ -57,7 +57,7 @@ def save_reservations(df):
 
 # ✅ Liste des créneaux disponibles
 def get_available_slots():
-    return [f"{hour}h{minute:02d}" for hour in range(9, 20)]
+    return [f"{hour}h{minute:02d}" for hour in range(9, 20) for minute in (0, 30)]
 
 # ✅ Enregistrer plusieurs créneaux
 def save_reservation(prenom, nom, date, creneaux):
