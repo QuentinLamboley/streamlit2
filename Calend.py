@@ -173,7 +173,40 @@ col1, col2 = st.columns(2)
 prenom = col1.text_input("🧑 Prénom")
 nom = col2.text_input("👤 Nom")
 
-date = st.date_input("📅 Choisissez votre date de disponibilité")
+from datetime import date
+
+# 🔒 Liste des jours fériés en France pour 2025
+def get_french_holidays_2025():
+    return set([
+        date(2025, 1, 1),
+        date(2025, 4, 21),
+        date(2025, 5, 1),
+        date(2025, 5, 8),
+        date(2025, 5, 29),
+        date(2025, 6, 9),
+        date(2025, 7, 14),
+        date(2025, 8, 15),
+        date(2025, 11, 1),
+        date(2025, 11, 11),
+        date(2025, 12, 25),
+    ])
+
+# 📆 Filtrer les jours valides
+french_holidays = get_french_holidays_2025()
+
+def is_valid_booking_date(d):
+    return (
+        d >= date(2025, 5, 26) and
+        d.weekday() < 5 and  # 0=Monday, 6=Sunday
+        d not in french_holidays
+    )
+
+valid_dates = [date(2025, 5, 26) + timedelta(days=i) for i in range(365)]
+valid_dates = [d for d in valid_dates if is_valid_booking_date(d)]
+
+# 🗓️ Remplace le date_input par une selectbox filtrée
+date = st.selectbox("📅 Choisissez votre date de disponibilité", valid_dates)
+
 creneau = st.selectbox("⏳ Choisissez votre créneau horaire", get_available_slots())
 
 email = st.text_input("📧 Entrez votre adresse e-mail", placeholder="exemple@domaine.com")
