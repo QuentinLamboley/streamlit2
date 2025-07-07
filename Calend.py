@@ -188,6 +188,7 @@ def get_french_holidays_2025():
         date(2025, 6, 9),
         date(2025, 6, 10),
         date(2025, 6, 19),
+        date(2025, 7, 8),
         date(2025, 7, 14),
         date(2025, 8, 15),
         date(2025, 11, 1),
