@@ -201,7 +201,7 @@ french_holidays = get_french_holidays_2025()
 
 def is_valid_booking_date(d):
     return (
-        d >= date(2025, 5, 26) and
+        d >= date(2025, 7, 9) and
         d.weekday() < 5 and  # 0=Monday, 6=Sunday
         d not in french_holidays
     )
