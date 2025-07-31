@@ -99,7 +99,7 @@ def delete_all_reservations(password):
 st.set_page_config(page_title="Calendar Tool", layout="centered")
 st.markdown("""<h1 style='text-align: center; background-color: #004466; padding: 15px; border-radius: 10px; color: white;'>
 📆 Reservations tool</h1>""", unsafe_allow_html=True)
-st.markdown("### **Réservez vos créneaux (week-ends d’août 2025)** 📝")
+st.markdown("### **Créneau pour la cousinade** 📝")
 
 col1, col2 = st.columns(2)
 prenom = col1.text_input("👩 Prénom")
