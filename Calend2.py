@@ -4,6 +4,7 @@ import requests
 import dropbox
 from io import BytesIO
 from datetime import datetime, timedelta
+import plotly.express as px
 
 # 🔑 Connexion Dropbox (à changer avant prod)
 DROPBOX_APP_KEY = "siecwy4rj0ijazf"
@@ -36,13 +37,11 @@ def load_reservations():
     try:
         _, res = dbx.files_download(DROPBOX_FILE_PATH)
         df = pd.read_excel(BytesIO(res.content), engine="openpyxl", dtype={"Téléphone": str})  
-        # S'assure que les colonnes existent
         for col in ["Prénom", "Nom", "Date", "Plage"]:
             if col not in df.columns:
                 df[col] = ""
         return df
     except Exception:
-        # Toujours créer un df avec les bonnes colonnes
         return pd.DataFrame(columns=["Prénom", "Nom", "Date", "Plage"])
 
 def save_reservations(df):
@@ -67,16 +66,13 @@ def get_august_2025_weekends():
         start += delta
     return weekends
 
-# ✅ Créneaux midi/soir
 CRENEAUX = ["midi", "soir"]
 
-# ✅ Enregistrer plusieurs réservations (anti-doublon)
 def save_reservations_multi(prenom, nom, selections):
     df = load_reservations()
     nb_ajoute = 0
     doublons = []
     for date, plage in selections:
-        # On vérifie les doublons exacts
         mask = (
             (df["Prénom"] == prenom) &
             (df["Nom"] == nom) &
@@ -86,20 +82,17 @@ def save_reservations_multi(prenom, nom, selections):
         if mask.any():
             doublons.append(f"{date} ({plage})")
             continue
-        # Ajout dans le DataFrame
         new_row = pd.DataFrame([[prenom, nom, date, plage]], columns=["Prénom", "Nom", "Date", "Plage"])
         df = pd.concat([df, new_row], ignore_index=True)
         nb_ajoute += 1
     save_reservations(df)
     return nb_ajoute, doublons
 
-# ✅ Supprimer une réservation spécifique
 def delete_reservation(prenom, nom, date, plage):
     df = load_reservations()
     df = df[~((df["Prénom"] == prenom) & (df["Nom"] == nom) & (df["Date"] == date) & (df["Plage"] == plage))]
     save_reservations(df)
 
-# ✅ Réinitialiser toutes les réservations (Admin)
 def delete_all_reservations(password):
     if password == "DeleteAll":
         save_reservations(pd.DataFrame(columns=["Prénom", "Nom", "Date", "Plage"]))
@@ -158,6 +151,45 @@ if not df_reservations.empty:
     df_reservations["NomComplet"] = df_reservations["Prénom"].astype(str) + " " + df_reservations["Nom"].astype(str)
     st.dataframe(df_reservations[["NomComplet", "Date", "Plage"]])
 
+# ✅ BARPLOT : disponibilités par jour et plage (avec filtre personne)
+st.markdown("---")
+st.markdown("### 📈 **Disponibilités par créneau (tous/toutes personnes ou filtré)**")
+
+if not df_reservations.empty:
+    all_users = sorted(df_reservations["NomComplet"].unique())
+    selected_users = st.multiselect("👥 Filtrer par personne(s) (la sélection affichera les créneaux communs)", all_users)
+    df_filtered = df_reservations.copy()
+    if selected_users:
+        grouped = df_filtered.groupby(["Date", "Plage"])["NomComplet"].nunique()
+        # On ne garde que les créneaux où toutes les personnes sont présentes
+        common_slots = grouped[grouped == len(selected_users)].index
+        df_filtered = df_filtered.set_index(["Date", "Plage"]).loc[common_slots].reset_index()
+
+    if df_filtered.empty:
+        st.info("Aucun créneau commun trouvé pour les personnes sélectionnées.")
+    else:
+        for jour, df_jour in df_filtered.groupby("Date"):
+            st.markdown(f"#### 📅 {jour}")
+            counts = df_jour["Plage"].value_counts().sort_index()
+            noms_par_plage = df_jour.groupby("Plage")["Prénom"].apply(lambda x: ', '.join(x))
+
+            df_plot = pd.DataFrame({"Plage": counts.index, "Nombre de réservations": counts.values})
+            df_plot["Noms"] = df_plot["Plage"].map(noms_par_plage)
+
+            fig = px.bar(
+                df_plot,
+                x="Plage",
+                y="Nombre de réservations",
+                text="Nombre de réservations",
+                labels={'Plage': "Plage horaire", 'Nombre de réservations': "Nombre de réservations"},
+                title=f"Disponibilités le {jour}",
+                color="Plage",
+                hover_data={"Noms": True},
+            )
+            fig.update_traces(texttemplate='%{text}', textposition='outside')
+            fig.update_yaxes(dtick=1)
+            st.plotly_chart(fig, use_container_width=True)
+
 # ✅ Suppression des créneaux individuels
 st.markdown("---")
 st.markdown("### ❌ **Supprimer un créneau réservé**")
@@ -179,5 +211,4 @@ st.markdown("---")
 admin_password = st.text_input("🔑 Mot de passe admin", type="password")
 if st.button("❌ Supprimer TOUTES les réservations"):
     delete_all_reservations(admin_password)
-
 
