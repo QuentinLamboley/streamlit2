@@ -36,8 +36,13 @@ def load_reservations():
     try:
         _, res = dbx.files_download(DROPBOX_FILE_PATH)
         df = pd.read_excel(BytesIO(res.content), engine="openpyxl", dtype={"Téléphone": str})  
+        # S'assure que les colonnes existent
+        for col in ["Prénom", "Nom", "Date", "Plage"]:
+            if col not in df.columns:
+                df[col] = ""
         return df
     except Exception:
+        # Toujours créer un df avec les bonnes colonnes
         return pd.DataFrame(columns=["Prénom", "Nom", "Date", "Plage"])
 
 def save_reservations(df):
@@ -65,22 +70,28 @@ def get_august_2025_weekends():
 # ✅ Créneaux midi/soir
 CRENEAUX = ["midi", "soir"]
 
-# ✅ Enregistrer la réservation (anti-doublon)
-def save_reservation(prenom, nom, date, plage):
+# ✅ Enregistrer plusieurs réservations (anti-doublon)
+def save_reservations_multi(prenom, nom, selections):
     df = load_reservations()
-    # Vérifie si la réservation existe déjà
-    already_reserved = (
-        (df["Prénom"] == prenom) & 
-        (df["Nom"] == nom) & 
-        (df["Date"] == date) & 
-        (df["Plage"] == plage)
-    ).any()
-    if already_reserved:
-        return False  # Doublon
-    new_row = pd.DataFrame([[prenom, nom, date, plage]], columns=["Prénom", "Nom", "Date", "Plage"])
-    df = pd.concat([df, new_row], ignore_index=True)
+    nb_ajoute = 0
+    doublons = []
+    for date, plage in selections:
+        # On vérifie les doublons exacts
+        mask = (
+            (df["Prénom"] == prenom) &
+            (df["Nom"] == nom) &
+            (df["Date"] == date) &
+            (df["Plage"] == plage)
+        )
+        if mask.any():
+            doublons.append(f"{date} ({plage})")
+            continue
+        # Ajout dans le DataFrame
+        new_row = pd.DataFrame([[prenom, nom, date, plage]], columns=["Prénom", "Nom", "Date", "Plage"])
+        df = pd.concat([df, new_row], ignore_index=True)
+        nb_ajoute += 1
     save_reservations(df)
-    return True
+    return nb_ajoute, doublons
 
 # ✅ Supprimer une réservation spécifique
 def delete_reservation(prenom, nom, date, plage):
@@ -104,22 +115,38 @@ st.markdown("### **Créneau pour la cousinade** 📝")
 col1, col2 = st.columns(2)
 prenom = col1.text_input("👩 Prénom")
 nom = col2.text_input("👤 Nom")
+
 dates_options = get_august_2025_weekends()
 date_str_options = [date.strftime("%Y-%m-%d") for date in dates_options]
-date_selected_str = st.selectbox("📅 Sélectionnez une date", date_str_options)
-date_selected = date_selected_str  # Directement sous forme de string pour la table
 
-plage_selected = st.radio("⏳ Choisissez votre plage horaire", CRENEAUX, horizontal=True)
+# Sélection multiple (combinaisons date/plage)
+options = []
+for date in date_str_options:
+    for plage in CRENEAUX:
+        options.append(f"{date} - {plage}")
+
+selections = st.multiselect("📅 Sélectionnez un ou plusieurs créneaux (date + plage)", options)
+
+# Conversion des sélections en tuples (date, plage)
+selections_tuples = []
+for sel in selections:
+    try:
+        date, plage = sel.split(" - ")
+        selections_tuples.append((date, plage))
+    except:
+        pass
 
 if st.button("✅ Valider la réservation"):
-    if not prenom or not nom or not date_selected or not plage_selected:
+    if not prenom or not nom or not selections_tuples:
         st.error("⚠️ Veuillez remplir tous les champs.")
     else:
-        saved = save_reservation(prenom, nom, date_selected, plage_selected)
-        if saved:
-            st.success(f"✅ Réservation confirmée pour {prenom} {nom} le {date_selected} ({plage_selected}) !")
-        else:
-            st.warning("⚠️ Vous avez déjà réservé ce créneau.")
+        nb_ajoute, doublons = save_reservations_multi(prenom, nom, selections_tuples)
+        msg = ""
+        if nb_ajoute:
+            msg += f"✅ {nb_ajoute} réservation(s) ajoutée(s) pour {prenom} {nom} !\n"
+        if doublons:
+            msg += "⚠️ Créneau(x) déjà réservé(s) (pas ajoutés) : " + ", ".join(doublons)
+        st.success(msg if msg else "Aucune réservation ajoutée.")
 
 # ✅ Affichage des réservations existantes
 st.markdown("---")
@@ -128,7 +155,7 @@ st.markdown("### 📊 **Réservations existantes**")
 df_reservations = load_reservations()
 
 if not df_reservations.empty:
-    df_reservations["NomComplet"] = df_reservations["Prénom"] + " " + df_reservations["Nom"]
+    df_reservations["NomComplet"] = df_reservations["Prénom"].astype(str) + " " + df_reservations["Nom"].astype(str)
     st.dataframe(df_reservations[["NomComplet", "Date", "Plage"]])
 
 # ✅ Suppression des créneaux individuels
