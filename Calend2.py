@@ -96,7 +96,7 @@ def delete_reservation(prenom, nom, date, plage):
 def delete_all_reservations(password):
     if password == "DeleteAll":
         save_reservations(pd.DataFrame(columns=["Prénom", "Nom", "Date", "Plage"]))
-        st.success("✅ Toutes les réservations ont été supprimées avec succès.")
+        st.success("✅ Tous les créneaux ont été supprimées avec succès.")
     else:
         st.error("❌ Mot de passe incorrect.")
 
@@ -129,21 +129,21 @@ for sel in selections:
     except:
         pass
 
-if st.button("✅ Valider la réservation"):
+if st.button("✅ Valider les créneaux"):
     if not prenom or not nom or not selections_tuples:
         st.error("⚠️ Veuillez remplir tous les champs.")
     else:
         nb_ajoute, doublons = save_reservations_multi(prenom, nom, selections_tuples)
         msg = ""
         if nb_ajoute:
-            msg += f"✅ {nb_ajoute} réservation(s) ajoutée(s) pour {prenom} {nom} !\n"
+            msg += f"✅ {nb_ajoute} créneau(x) ajouté(s) pour {prenom} {nom} !\n"
         if doublons:
             msg += "⚠️ Créneau(x) déjà réservé(s) (pas ajoutés) : " + ", ".join(doublons)
-        st.success(msg if msg else "Aucune réservation ajoutée.")
+        st.success(msg if msg else "Aucun créneau ajouté.")
 
 # ✅ Affichage des réservations existantes
 st.markdown("---")
-st.markdown("### 📊 **Réservations existantes**")
+st.markdown("### 📊 **Créneaux proposés**")
 
 df_reservations = load_reservations()
 
@@ -173,15 +173,15 @@ if not df_reservations.empty:
             counts = df_jour["Plage"].value_counts().sort_index()
             noms_par_plage = df_jour.groupby("Plage")["Prénom"].apply(lambda x: ', '.join(x))
 
-            df_plot = pd.DataFrame({"Plage": counts.index, "Nombre de réservations": counts.values})
+            df_plot = pd.DataFrame({"Plage": counts.index, "Nombre de créneaux": counts.values})
             df_plot["Noms"] = df_plot["Plage"].map(noms_par_plage)
 
             fig = px.bar(
                 df_plot,
                 x="Plage",
-                y="Nombre de réservations",
-                text="Nombre de réservations",
-                labels={'Plage': "Plage horaire", 'Nombre de réservations': "Nombre de réservations"},
+                y="Nombre de créneaux",
+                text="Nombre de créneaux",
+                labels={'Plage': "Plage horaire", 'Nombre de créneaux': "Nombre de créneaux"},
                 title=f"Disponibilités le {jour}",
                 color="Plage",
                 hover_data={"Noms": True},
@@ -209,6 +209,7 @@ if not df_reservations.empty:
 # ✅ Réinitialisation des créneaux (Admin)
 st.markdown("---")
 admin_password = st.text_input("🔑 Mot de passe admin", type="password")
-if st.button("❌ Supprimer TOUTES les réservations"):
+if st.button("❌ Supprimer TOUS les créneaux"):
     delete_all_reservations(admin_password)
+
 
