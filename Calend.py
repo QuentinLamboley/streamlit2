@@ -39,6 +39,11 @@ dbx = dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
 
 DROPBOX_FILE_PATH = "/reservations.xlsx"  # Chemin du fichier dans Dropbox
 
+# 🔧 Génération des créneaux (toutes les 30 minutes, 9h–19h30, SAUF 12h)
+def generate_all_slots():
+    return [f"{hour}h{minute:02d}"
+            for hour in range(9, 20) if hour != 12
+            for minute in (0, 30)]
 
 # ✅ Supprimer une réservation spécifique (uniquement si le créneau est à +48h)
 def delete_reservation(email, telephone):
@@ -74,17 +79,16 @@ def get_available_slots():
     try:
         df = load_reservations()
         if "Créneau" not in df.columns:
-            return [f"{hour}h{minute:02d}" for hour in range(9, 20) for minute in (0, 30)]  # Tous les créneaux
+            return generate_all_slots()  # Tous les créneaux SANS 12h
 
         reserved_slots = set(df["Créneau"].dropna().unique())  # Liste des créneaux déjà réservés
-        all_slots = [f"{hour}h{minute:02d}" for hour in range(9, 20) for minute in (0, 30)]
+        all_slots = generate_all_slots()
         available_slots = [slot for slot in all_slots if slot not in reserved_slots]  # Filtrer les créneaux disponibles
 
         return available_slots
     except Exception as e:
         st.error(f"⚠️ Erreur lors de la récupération des créneaux disponibles : {e}")
-        return [f"{hour}h{minute:02d}" for hour in range(9, 20) for minute in (0, 30)]
-
+        return generate_all_slots()
 
 def load_reservations():
     try:
@@ -105,7 +109,6 @@ def save_reservations(df):
     except Exception as e:
         st.error(f"⚠️ Erreur lors de l'enregistrement : {e}")
 
-
 # ✅ Sauvegarder une réservation (en vérifiant que l'email et le téléphone ne sont pas déjà enregistrés)
 def save_reservation(prenom, nom, date, creneau, email, telephone):
     try:
@@ -115,6 +118,20 @@ def save_reservation(prenom, nom, date, creneau, email, telephone):
         if ((df["Mail"] == email) | (df["Téléphone"] == telephone)).any():
             st.error("⚠️ Une réservation a déjà été effectuée avec cet e-mail ou ce numéro de téléphone. "
                      "Une seule réservation est autorisée par contact.")
+            return False
+
+        # ⛔ Interdire la réservation à moins de 48h
+        try:
+            res_date = pd.to_datetime(date).date()
+            res_time = datetime.strptime(creneau, "%Hh%M").time()
+            res_dt = datetime.combine(res_date, res_time)
+        except Exception as e_parse:
+            st.error(f"⚠️ Date/heure invalides ({e_parse}).")
+            return False
+
+        if res_dt - datetime.now() < timedelta(hours=48):
+            st.error("⛔ La réservation doit être effectuée **au moins 48 heures à l'avance**. "
+                     "Veuillez choisir un autre créneau.")
             return False
 
         new_row = pd.DataFrame([[prenom, nom, date, creneau, email, telephone]],
@@ -129,7 +146,7 @@ def save_reservation(prenom, nom, date, creneau, email, telephone):
         st.error(f"⚠️ Erreur lors de l'enregistrement : {e}")
         return False
 
-# ✅ Supprimer une réservation spécifique
+# ✅ Supprimer une réservation spécifique (version UI existante)
 def delete_reservation(email, telephone):
     try:
         df = load_reservations()
@@ -148,7 +165,6 @@ def delete_reservation(email, telephone):
         if reservation_datetime - datetime.now() < timedelta(hours=48):
             st.error("⚠️ L'annulation n'est plus possible car votre créneau est dans moins de 48 heures. Merci de contacter au plus vite le 06.42.13.69.64 pour lui faire part de votre problème.")
             return  # 🔥 Ne retourne rien pour éviter le deuxième message d'erreur
-
 
         # Supprimer la réservation
         df = df[(df["Mail"] != email) | (df["Téléphone"] != telephone)]
@@ -251,6 +267,7 @@ st.markdown("---")
 st.markdown("### 🔥 **Supprimer toutes les réservations** (Accès restreint)")
 
 admin_password = st.text_input("🔑 Entrez le mot de passe administrateur", type="password")
+
 # ✅ Supprimer toutes les réservations (nécessite un mot de passe administrateur)
 def delete_all_reservations(password):
     if password == "DeleteAll":
@@ -265,6 +282,3 @@ def delete_all_reservations(password):
 
 if st.button("❌ Supprimer TOUTES les réservations"):
     delete_all_reservations(admin_password)
-
-
-
