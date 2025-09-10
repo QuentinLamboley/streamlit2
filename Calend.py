@@ -39,10 +39,10 @@ dbx = dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
 
 DROPBOX_FILE_PATH = "/reservations.xlsx"  # Chemin du fichier dans Dropbox
 
-# 🔧 Génération des créneaux (toutes les 30 minutes, 9h–19h30, SAUF 12h)
+# 🔧 Génération des créneaux (toutes les 30 minutes, 9h00–19h30, SANS exclure d'heure)
 def generate_all_slots():
     return [f"{hour}h{minute:02d}"
-            for hour in range(9, 20) if hour != 12
+            for hour in range(9, 20)
             for minute in (0, 30)]
 
 # ✅ Supprimer une réservation spécifique (uniquement si le créneau est à +48h)
@@ -79,7 +79,7 @@ def get_available_slots():
     try:
         df = load_reservations()
         if "Créneau" not in df.columns:
-            return generate_all_slots()  # Tous les créneaux SANS 12h
+            return generate_all_slots()  # Tous les créneaux (y compris 10h/11h)
 
         reserved_slots = set(df["Créneau"].dropna().unique())  # Liste des créneaux déjà réservés
         all_slots = generate_all_slots()
