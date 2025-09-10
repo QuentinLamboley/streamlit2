@@ -206,7 +206,7 @@ def is_valid_booking_date(d):
         d not in french_holidays
     )
 
-valid_dates = [date(2025, 5, 26) + timedelta(days=i) for i in range(365)]
+valid_dates = [date(2025, 10, 1) + timedelta(days=i) for i in range(365)]
 valid_dates = [d for d in valid_dates if is_valid_booking_date(d)]
 
 # 🗓️ Remplace le date_input par une selectbox filtrée
@@ -265,5 +265,6 @@ def delete_all_reservations(password):
 
 if st.button("❌ Supprimer TOUTES les réservations"):
     delete_all_reservations(admin_password)
+
 
 
