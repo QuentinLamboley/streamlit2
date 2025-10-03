@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 import dropbox
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 # 🔑 Informations pour Dropbox
 DROPBOX_APP_KEY = "siecwy4rj0ijazf"
@@ -37,7 +37,8 @@ if not DROPBOX_ACCESS_TOKEN:
 # 📌 Connexion à Dropbox avec un token renouvelé
 dbx = dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
 
-DROPBOX_FILE_PATH = "/reservations.xlsx"  # Chemin du fichier dans Dropbox
+DROPBOX_FILE_PATH = "/reservations.xlsx"           # Fichier des réservations
+DROPBOX_BLOCKED_PATH = "/blocked_slots.xlsx"       # Nouveau : fichier des créneaux bloqués (admin)
 
 # 🔧 Génération des créneaux (toutes les 30 minutes, 9h00–19h30, SANS exclure d'heure)
 def generate_all_slots():
@@ -45,7 +46,144 @@ def generate_all_slots():
             for hour in range(9, 20)
             for minute in (0, 30)]
 
-# ✅ Supprimer une réservation spécifique (uniquement si le créneau est à +48h)
+# ========= GESTION DES RESERVATIONS =========
+
+def load_reservations():
+    try:
+        _, res = dbx.files_download(DROPBOX_FILE_PATH)
+        df = pd.read_excel(BytesIO(res.content), engine="openpyxl", dtype={"Téléphone": str})  # 🔥 Force téléphone en str
+        return df
+    except Exception as e:
+        st.error(f"⚠️ Erreur de chargement du fichier : {e}")
+        return pd.DataFrame(columns=["Prénom", "Nom", "Date", "Créneau", "Mail", "Téléphone"])
+
+def save_reservations(df):
+    try:
+        output = BytesIO()
+        df.to_excel(output, index=False)
+        output.seek(0)
+        dbx.files_upload(output.read(), DROPBOX_FILE_PATH, mode=dropbox.files.WriteMode("overwrite"))
+    except Exception as e:
+        st.error(f"⚠️ Erreur lors de l'enregistrement : {e}")
+
+# ========= GESTION DES CRENEAUX BLOQUES (ADMIN) =========
+
+def load_blocked_slots():
+    """Charge le tableau des créneaux bloqués (admin)."""
+    try:
+        _, res = dbx.files_download(DROPBOX_BLOCKED_PATH)
+        df = pd.read_excel(BytesIO(res.content), engine="openpyxl")
+        # Normalise les colonnes au besoin
+        if "Date" not in df.columns or "Créneau" not in df.columns:
+            df = pd.DataFrame(columns=["Date", "Créneau"])
+        # Cast Date en str (YYYY-MM-DD)
+        df["Date"] = df["Date"].astype(str)
+        df["Créneau"] = df["Créneau"].astype(str)
+        return df
+    except Exception:
+        # S'il n'existe pas encore, renvoyer un DF vide
+        return pd.DataFrame(columns=["Date", "Créneau"])
+
+def save_blocked_slots(df):
+    """Sauvegarde le tableau des créneaux bloqués (admin)."""
+    try:
+        output = BytesIO()
+        df.to_excel(output, index=False)
+        output.seek(0)
+        dbx.files_upload(output.read(), DROPBOX_BLOCKED_PATH, mode=dropbox.files.WriteMode("overwrite"))
+    except Exception as e:
+        st.error(f"⚠️ Erreur lors de l'enregistrement des créneaux bloqués : {e}")
+
+def block_slot_admin(date_str, slot_str):
+    """Ajoute un créneau bloqué pour une date (admin)."""
+    dfb = load_blocked_slots()
+    exists = ((dfb["Date"] == date_str) & (dfb["Créneau"] == slot_str)).any()
+    if not exists:
+        dfb = pd.concat([dfb, pd.DataFrame([{"Date": date_str, "Créneau": slot_str}])], ignore_index=True)
+        save_blocked_slots(dfb)
+        return True
+    return False
+
+def unblock_slot_admin(date_str, slot_str):
+    """Retire un créneau bloqué pour une date (admin)."""
+    dfb = load_blocked_slots()
+    before = len(dfb)
+    dfb = dfb[~((dfb["Date"] == date_str) & (dfb["Créneau"] == slot_str))].copy()
+    if len(dfb) < before:
+        save_blocked_slots(dfb)
+        return True
+    return False
+
+def get_blocked_slots_for_date(date_str):
+    dfb = load_blocked_slots()
+    if dfb.empty:
+        return set()
+    return set(dfb.loc[dfb["Date"] == date_str, "Créneau"].dropna().astype(str).unique())
+
+# ✅ Récupérer les créneaux disponibles en fonction des réservations existantes et des créneaux bloqués
+def get_available_slots(selected_date=None):
+    try:
+        df = load_reservations()
+        if "Créneau" not in df.columns:
+            base = generate_all_slots()
+        else:
+            reserved_slots = set(df["Créneau"].dropna().astype(str).unique())
+            base = [slot for slot in generate_all_slots() if slot not in reserved_slots]
+
+        # Filtre aussi les créneaux bloqués par l'admin si une date est fournie
+        if selected_date is not None:
+            date_str = str(selected_date)
+            blocked = get_blocked_slots_for_date(date_str)
+            base = [slot for slot in base if slot not in blocked]
+
+        return base
+    except Exception as e:
+        st.error(f"⚠️ Erreur lors de la récupération des créneaux disponibles : {e}")
+        return generate_all_slots()
+
+# ✅ Sauvegarder une réservation (en vérifiant que l'email et le téléphone ne sont pas déjà enregistrés)
+def save_reservation(prenom, nom, date_val, creneau, email, telephone):
+    try:
+        df = load_reservations()
+
+        # Vérifier si l'email ou le téléphone sont déjà enregistrés
+        if ((df["Mail"] == email) | (df["Téléphone"] == telephone)).any():
+            st.error("⚠️ Une réservation a déjà été effectuée avec cet e-mail ou ce numéro de téléphone. "
+                     "Une seule réservation est autorisée par contact.")
+            return False
+
+        # ⛔ Interdire la réservation à moins de 48h
+        try:
+            res_date = pd.to_datetime(date_val).date()
+            res_time = datetime.strptime(creneau, "%Hh%M").time()
+            res_dt = datetime.combine(res_date, res_time)
+        except Exception as e_parse:
+            st.error(f"⚠️ Date/heure invalides ({e_parse}).")
+            return False
+
+        if res_dt - datetime.now() < timedelta(hours=48):
+            st.error("⛔ La réservation doit être effectuée **au moins 48 heures à l'avance**. "
+                     "Veuillez choisir un autre créneau.")
+            return False
+
+        # ⛔ Empêcher la réservation sur un créneau bloqué (sécurité côté serveur)
+        if creneau in get_blocked_slots_for_date(str(res_date)):
+            st.error("⛔ Ce créneau a été bloqué par l'organisation. Veuillez en choisir un autre.")
+            return False
+
+        new_row = pd.DataFrame([[prenom, nom, date_val, creneau, email, telephone]],
+                               columns=["Prénom", "Nom", "Date", "Créneau", "Mail", "Téléphone"])
+        df = pd.concat([df, new_row], ignore_index=True)
+
+        df["Téléphone"] = df["Téléphone"].astype(str)  # 🔥 Assure que tout est en str avant de sauvegarder
+
+        save_reservations(df)
+        return True
+    except Exception as e:
+        st.error(f"⚠️ Erreur lors de l'enregistrement : {e}")
+        return False
+
+# ✅ Supprimer une réservation spécifique (UI - première définition)
 def delete_reservation(email, telephone):
     try:
         df = load_reservations()
@@ -74,79 +212,7 @@ def delete_reservation(email, telephone):
         st.error(f"⚠️ Erreur lors de la suppression de la réservation : {e}")
         return False
 
-# ✅ Récupérer les créneaux disponibles en fonction des réservations existantes
-def get_available_slots():
-    try:
-        df = load_reservations()
-        if "Créneau" not in df.columns:
-            return generate_all_slots()  # Tous les créneaux (y compris 10h/11h)
-
-        reserved_slots = set(df["Créneau"].dropna().unique())  # Liste des créneaux déjà réservés
-        all_slots = generate_all_slots()
-        available_slots = [slot for slot in all_slots if slot not in reserved_slots]  # Filtrer les créneaux disponibles
-
-        return available_slots
-    except Exception as e:
-        st.error(f"⚠️ Erreur lors de la récupération des créneaux disponibles : {e}")
-        return generate_all_slots()
-
-def load_reservations():
-    try:
-        _, res = dbx.files_download(DROPBOX_FILE_PATH)
-        df = pd.read_excel(BytesIO(res.content), engine="openpyxl", dtype={"Téléphone": str})  # 🔥 Force le téléphone en str
-        return df
-    except Exception as e:
-        st.error(f"⚠️ Erreur de chargement du fichier : {e}")
-        return pd.DataFrame(columns=["Prénom", "Nom", "Date", "Créneau", "Mail", "Téléphone"])
-
-# ✅ Sauvegarder les réservations dans Dropbox
-def save_reservations(df):
-    try:
-        output = BytesIO()
-        df.to_excel(output, index=False)
-        output.seek(0)
-        dbx.files_upload(output.read(), DROPBOX_FILE_PATH, mode=dropbox.files.WriteMode("overwrite"))
-    except Exception as e:
-        st.error(f"⚠️ Erreur lors de l'enregistrement : {e}")
-
-# ✅ Sauvegarder une réservation (en vérifiant que l'email et le téléphone ne sont pas déjà enregistrés)
-def save_reservation(prenom, nom, date, creneau, email, telephone):
-    try:
-        df = load_reservations()
-
-        # Vérifier si l'email ou le téléphone sont déjà enregistrés
-        if ((df["Mail"] == email) | (df["Téléphone"] == telephone)).any():
-            st.error("⚠️ Une réservation a déjà été effectuée avec cet e-mail ou ce numéro de téléphone. "
-                     "Une seule réservation est autorisée par contact.")
-            return False
-
-        # ⛔ Interdire la réservation à moins de 48h
-        try:
-            res_date = pd.to_datetime(date).date()
-            res_time = datetime.strptime(creneau, "%Hh%M").time()
-            res_dt = datetime.combine(res_date, res_time)
-        except Exception as e_parse:
-            st.error(f"⚠️ Date/heure invalides ({e_parse}).")
-            return False
-
-        if res_dt - datetime.now() < timedelta(hours=48):
-            st.error("⛔ La réservation doit être effectuée **au moins 48 heures à l'avance**. "
-                     "Veuillez choisir un autre créneau.")
-            return False
-
-        new_row = pd.DataFrame([[prenom, nom, date, creneau, email, telephone]],
-                               columns=["Prénom", "Nom", "Date", "Créneau", "Mail", "Téléphone"])
-        df = pd.concat([df, new_row], ignore_index=True)
-
-        df["Téléphone"] = df["Téléphone"].astype(str)  # 🔥 Assure que tout est en str avant de sauvegarder
-
-        save_reservations(df)
-        return True
-    except Exception as e:
-        st.error(f"⚠️ Erreur lors de l'enregistrement : {e}")
-        return False
-
-# ✅ Supprimer une réservation spécifique (version UI existante)
+# ✅ Supprimer une réservation spécifique (version UI existante - redéfinition)
 def delete_reservation(email, telephone):
     try:
         df = load_reservations()
@@ -189,9 +255,7 @@ col1, col2 = st.columns(2)
 prenom = col1.text_input("🧑 Prénom")
 nom = col2.text_input("👤 Nom")
 
-from datetime import date
-
-# 🔒 Liste des jours fériés en France pour 2025
+# 🔒 Liste des jours fériés en France pour 2025 (inchangée)
 def get_french_holidays_2025():
     return set([
         date(2025, 1, 1),
@@ -212,23 +276,26 @@ def get_french_holidays_2025():
         date(2025, 12, 25),
     ])
 
-# 📆 Filtrer les jours valides
+# 📆 Filtrer les jours valides (J+2 dynamiquement)
 french_holidays = get_french_holidays_2025()
+START_DATE = (datetime.now().date() + timedelta(days=2))
 
 def is_valid_booking_date(d):
     return (
-        d >= date(2025, 7, 9) and
+        d >= START_DATE and
         d.weekday() < 5 and  # 0=Monday, 6=Sunday
         d not in french_holidays
     )
 
-valid_dates = [date(2025, 10, 1) + timedelta(days=i) for i in range(365)]
+# Fenêtre de 365 jours à partir de J+2
+valid_dates = [START_DATE + timedelta(days=i) for i in range(365)]
 valid_dates = [d for d in valid_dates if is_valid_booking_date(d)]
 
-# 🗓️ Remplace le date_input par une selectbox filtrée
-date = st.selectbox("📅 Choisissez votre date de disponibilité", valid_dates)
+# 🗓️ Sélection de la date
+selected_date = st.selectbox("📅 Choisissez votre date de disponibilité", valid_dates)
 
-creneau = st.selectbox("⏳ Choisissez votre créneau horaire", get_available_slots())
+# ⏳ Créneaux disponibles (tiennent compte des réservations ET des créneaux bloqués)
+creneau = st.selectbox("⏳ Choisissez votre créneau horaire", get_available_slots(selected_date))
 
 email = st.text_input("📧 Entrez votre adresse e-mail", placeholder="exemple@domaine.com")
 telephone = st.text_input("📞 Entrez votre numéro de téléphone", placeholder="+33XXXXXXXXX")
@@ -237,11 +304,11 @@ if st.button("✅ Réserver", help="Réserver votre créneau"):
     if not prenom or not nom or not email or not telephone:
         st.error("⚠️ Veuillez remplir tous les champs.")
     else:
-        confirmation = st.warning(f"🔔 Vous êtes sur le point de réserver le créneau **{creneau}** le **{date}**.")
+        confirmation = st.warning(f"🔔 Vous êtes sur le point de réserver le créneau **{creneau}** le **{selected_date}**.")
         if confirmation:
-            success = save_reservation(prenom, nom, str(date), creneau, email, telephone)
+            success = save_reservation(prenom, nom, str(selected_date), creneau, email, telephone)
             if success:
-                st.success(f"✅ Réservation confirmée pour {prenom} {nom} à {creneau} le {date} !")
+                st.success(f"✅ Réservation confirmée pour {prenom} {nom} à {creneau} le {selected_date} !")
 
 # ✅ Suppression d'une réservation spécifique
 st.markdown("---")
@@ -261,6 +328,42 @@ if result is True:  # ✅ Uniquement si la suppression a bien eu lieu
     st.success("✅ Votre réservation a été annulée avec succès.")
 elif result is False:  # ❌ Ne rien afficher si c'est un blocage 48h
     st.error("⚠️ Veuillez entrer l'e-mail et le numéro de téléphone associés à votre réservation.")
+
+# ================== NOUVEAU : GESTION DES CRENEAUX (ADMIN SEULEMENT) ==================
+st.markdown("---")
+st.markdown("### 🔒 **Bloquer / Débloquer des créneaux** (Accès restreint)")
+
+admin_password_slots = st.text_input("🔑 Mot de passe administrateur (créneaux)", type="password", key="admin_pw_slots")
+admin_date = st.selectbox("📅 Date à gérer (admin)", valid_dates, key="admin_date_slots")
+blocked_now = sorted(list(get_blocked_slots_for_date(str(admin_date))))
+
+colA, colB = st.columns(2)
+with colA:
+    slot_to_block = st.selectbox("⏳ Créneau à bloquer", generate_all_slots(), key="slot_block")
+    if st.button("🚫 Bloquer ce créneau"):
+        if admin_password_slots == "DeleteAll":
+            ok = block_slot_admin(str(admin_date), slot_to_block)
+            if ok:
+                st.success(f"✅ Créneau {slot_to_block} bloqué le {admin_date}.")
+            else:
+                st.info("ℹ️ Ce créneau est déjà bloqué pour cette date.")
+        else:
+            st.error("❌ Mot de passe incorrect.")
+
+with colB:
+    slot_to_unblock = st.selectbox("⏳ Créneau à débloquer", blocked_now if blocked_now else ["(aucun)"], key="slot_unblock")
+    if st.button("♻️ Débloquer ce créneau"):
+        if admin_password_slots == "DeleteAll":
+            if blocked_now and slot_to_unblock != "(aucun)":
+                ok = unblock_slot_admin(str(admin_date), slot_to_unblock)
+                if ok:
+                    st.success(f"✅ Créneau {slot_to_unblock} débloqué le {admin_date}.")
+                else:
+                    st.info("ℹ️ Ce créneau n'était pas bloqué.")
+            else:
+                st.info("ℹ️ Aucun créneau à débloquer pour cette date.")
+        else:
+            st.error("❌ Mot de passe incorrect.")
 
 # ✅ Suppression totale des réservations (admin)
 st.markdown("---")
